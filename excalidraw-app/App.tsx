@@ -4,6 +4,7 @@ import {
   TTDDialogTrigger,
   CaptureUpdateAction,
   reconcileElements,
+  sceneCoordsToViewportCoords,
   useEditorInterface,
   ExcalidrawAPIProvider,
   useExcalidrawAPI,
@@ -144,10 +145,20 @@ import { ExcalidrawPlusIframeExport } from "./ExcalidrawPlusIframeExport";
 
 import "./index.scss";
 
-import { ExcalidrawPlusPromoBanner } from "./components/ExcalidrawPlusPromoBanner";
 import { AppSidebar } from "./components/AppSidebar";
+import { TemplatePicker } from "./components/TemplatePicker";
+import {
+  applyTemplateTask,
+  TEMPLATE_ELEMENT_ROLE,
+} from "./templates/helloInterview";
+import type { TemplateTaskId } from "./templates/helloInterview";
 
 import type { CollabAPI } from "./collab/Collab";
+
+const TEMPLATE_TASK_MENU_COPY = {
+  en: "Select a system design problem",
+  "ru-RU": "Выберите задачу системного дизайна",
+} as const;
 
 polyfill();
 
@@ -409,6 +420,65 @@ const ExcalidrawWrapper = () => {
     return isCollaborationLink(window.location.href);
   });
   const collabError = useAtomValue(collabErrorIndicatorAtom);
+  const taskMenuCopy =
+    langCode === "ru-RU"
+      ? TEMPLATE_TASK_MENU_COPY["ru-RU"]
+      : TEMPLATE_TASK_MENU_COPY.en;
+  const [isTaskMenuOpen, setIsTaskMenuOpen] = useState(false);
+  const [taskMenuPosition, setTaskMenuPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+
+  const handleCanvasPointerDown = useCallback(
+    (
+      _activeTool: AppState["activeTool"],
+      pointerDownState: Parameters<
+        NonNullable<ExcalidrawProps["onPointerDown"]>
+      >[1],
+    ) => {
+      if (
+        pointerDownState.hit.element?.customData?.templateRole ===
+        TEMPLATE_ELEMENT_ROLE.TASK_REQUIREMENTS_BLOCK
+      ) {
+        setIsTaskMenuOpen(true);
+        if (excalidrawAPI) {
+          const element = pointerDownState.hit.element;
+          const position = sceneCoordsToViewportCoords(
+            {
+              sceneX: element.x,
+              sceneY: element.y + element.height,
+            },
+            excalidrawAPI.getAppState(),
+          );
+          setTaskMenuPosition({ x: position.x, y: position.y + 12 });
+        }
+      } else {
+        setIsTaskMenuOpen(false);
+        setTaskMenuPosition(null);
+      }
+    },
+    [excalidrawAPI],
+  );
+
+  const handleTaskChange = useCallback(
+    (taskId: TemplateTaskId) => {
+      if (!excalidrawAPI) {
+        return;
+      }
+
+      excalidrawAPI.updateScene({
+        elements: applyTemplateTask(
+          [...excalidrawAPI.getSceneElements()],
+          taskId,
+        ),
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+      setIsTaskMenuOpen(false);
+      setTaskMenuPosition(null);
+    },
+    [excalidrawAPI],
+  );
 
   useHandleLibrary({
     excalidrawAPI,
@@ -913,6 +983,7 @@ const ExcalidrawWrapper = () => {
         initialData={initialStatePromiseRef.current.promise}
         isCollaborating={isCollaborating}
         onPointerUpdate={collabAPI?.onPointerUpdate}
+        onPointerDown={handleCanvasPointerDown}
         UIOptions={{
           canvasActions: {
             toggleTheme: true,
@@ -953,26 +1024,27 @@ const ExcalidrawWrapper = () => {
         theme={editorTheme}
         onThemeChange={setAppTheme}
         renderTopRightUI={(isMobile) => {
-          if (isMobile || !collabAPI || isCollabDisabled) {
+          if (isMobile) {
             return null;
           }
 
           return (
             <div className="excalidraw-ui-top-right">
-              {excalidrawAPI?.getEditorInterface().formFactor === "desktop" && (
-                <ExcalidrawPlusPromoBanner
-                  isSignedIn={isExcalidrawPlusSignedUser}
-                />
+              <TemplatePicker />
+              {collabAPI && !isCollabDisabled && (
+                <>
+                  {collabError.message && (
+                    <CollabError collabError={collabError} />
+                  )}
+                  <LiveCollaborationTrigger
+                    isCollaborating={isCollaborating}
+                    onSelect={() =>
+                      setShareDialogState({ isOpen: true, type: "share" })
+                    }
+                    editorInterface={editorInterface}
+                  />
+                </>
               )}
-
-              {collabError.message && <CollabError collabError={collabError} />}
-              <LiveCollaborationTrigger
-                isCollaborating={isCollaborating}
-                onSelect={() =>
-                  setShareDialogState({ isOpen: true, type: "share" })
-                }
-                editorInterface={editorInterface}
-              />
             </div>
           );
         }}
@@ -1257,6 +1329,38 @@ const ExcalidrawWrapper = () => {
           />
         )}
       </Excalidraw>
+      {isTaskMenuOpen && (
+        <div
+          className="template-task-menu"
+          data-testid="template-task-menu"
+          style={
+            taskMenuPosition
+              ? { left: taskMenuPosition.x, top: taskMenuPosition.y }
+              : undefined
+          }
+        >
+          <select
+            id="template-task-select"
+            className="template-task-menu__select"
+            aria-label={taskMenuCopy}
+            defaultValue=""
+            onChange={(event) => {
+              if (
+                event.target.value === "tinder" ||
+                event.target.value === "leetcode"
+              ) {
+                handleTaskChange(event.target.value as TemplateTaskId);
+              }
+            }}
+          >
+            <option value="" disabled>
+              {taskMenuCopy}
+            </option>
+            <option value="tinder">Tinder</option>
+            <option value="leetcode">LeetCode</option>
+          </select>
+        </div>
+      )}
     </div>
   );
 };
